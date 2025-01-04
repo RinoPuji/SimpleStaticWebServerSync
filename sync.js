@@ -28,7 +28,6 @@ async function syncFiles(localDir, remoteDir) {
     await sftp.connect(config);
     console.log('Connected to server.');
 
-    // Recursively upload files and clean remote files
     async function uploadAndCleanDirectory(localPath, remotePath) {
       const localItems = fs.readdirSync(localPath, { withFileTypes: true });
       let remoteItems = [];
@@ -41,7 +40,6 @@ async function syncFiles(localDir, remoteDir) {
         console.log(`Created remote directory: ${remotePath}`);
       }
 
-      // Convert remote items to a map for easy lookup
       const remoteItemMap = new Map(remoteItems.map(item => [item.name, item]));
 
       // Upload local files and directories
@@ -50,20 +48,47 @@ async function syncFiles(localDir, remoteDir) {
         const remoteItemPath = `${remotePath}/${item.name}`;
 
         if (item.isDirectory()) {
-          // Recur for directories
           await uploadAndCleanDirectory(localItemPath, remoteItemPath);
         } else {
-          // Upload files
-          try {
-            await sftp.put(localItemPath, remoteItemPath);
-            console.log(`Uploaded: ${localItemPath} -> ${remoteItemPath}`);
-          } catch (err) {
-            console.error(`Failed to upload: ${localItemPath} -> ${remoteItemPath}`);
-            console.error(err.message);
+          
+          // Get local file size
+          const localStats = fs.statSync(localItemPath);
+          const localSize = localStats.size; 
+
+          // Compare size between local and server if exist
+          const remoteItem = remoteItemMap.get(item.name);
+          if (remoteItem) {
+            const remoteStats = await sftp.stat(remoteItemPath);
+            const remoteSize = remoteStats.size; 
+
+            // Some debug for file size
+            console.log(`Local: ${localItemPath} -> size: ${localSize}`);
+            console.log(`Remote: ${remoteItemPath} -> size: ${remoteSize}`);
+
+            // Upload only if the file size has changed
+            if (localSize !== remoteSize) {
+              try {
+                await sftp.put(localItemPath, remoteItemPath);
+                console.log(`Uploaded (changed): ${localItemPath} -> ${remoteItemPath}`);
+              } catch (err) {
+                console.error(`Failed to upload: ${localItemPath} -> ${remoteItemPath}`);
+                console.error(err.message);
+              }
+            } else {
+              console.log(`Skipped (unchanged): ${localItemPath}`);
+            }
+          } else {
+            // Upload if the file doesn't exist at server
+            try {
+              await sftp.put(localItemPath, remoteItemPath);
+              console.log(`Uploaded (new): ${localItemPath} -> ${remoteItemPath}`);
+            } catch (err) {
+              console.error(`Failed to upload: ${localItemPath} -> ${remoteItemPath}`);
+              console.error(err.message);
+            }
           }
         }
 
-        // Remove processed item from the remote map
         remoteItemMap.delete(item.name);
       }
 
@@ -71,7 +96,7 @@ async function syncFiles(localDir, remoteDir) {
       for (const [remoteItemName, remoteItem] of remoteItemMap) {
         const remoteItemPath = `${remotePath}/${remoteItemName}`;
         if (remoteItem.type === 'd') {
-          // Recursive removal for directories
+    
           try {
             await sftp.rmdir(remoteItemPath, true);
             console.log(`Removed remote directory: ${remoteItemPath}`);
@@ -79,8 +104,9 @@ async function syncFiles(localDir, remoteDir) {
             console.error(`Failed to remove remote directory: ${remoteItemPath}`);
             console.error(err.message);
           }
+          
         } else {
-          // Remove file
+         
           try {
             await sftp.delete(remoteItemPath);
             console.log(`Removed remote file: ${remoteItemPath}`);
